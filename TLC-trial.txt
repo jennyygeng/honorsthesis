@@ -1,0 +1,6 @@
+# Data Dictionary: Treatment of Lead-Exposed Children (TLC) Trial
+
+This study is a placebo-controlled, randomized study of succimer (a chelating agent) in children with blood 
+lead levels of 20-44 micrograms/dL. The data consist of four repeated measurements of blood lead levels obtained at 
+baseline (or week 0), week 1, week 4, and week 6 on 100 children who were randomly assigned to chelation treatment  with succimer or placebo.
+
