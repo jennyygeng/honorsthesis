@@ -11,8 +11,8 @@ In clinical trials, patient non-adherence and dropout can severely compromise da
 ## ⚙️ Repository Contents
 * **`TLC Dashboard.Rmd`**: The interactive Shiny-enabled R Markdown dashboard used to visualize the simulated data and power analyses.
 * **`TLC Simulation Report.Rmd`**: A detailed statistical report outlining the methodology, simulation parameters, and findings.
-* **`tlc_mock.csv`**: The dataset containing both the original TLC trial data and the simulated missingness columns.
-* **`tlc-data.txt`**: Raw text format of the TLC dataset.
+* **`tlc_mock.csv`**: The dataset used in the project containing both the original TLC trial data and additional simulated columns.
+* **`tlc-data.txt`**: Raw text format of the original TLC dataset.
 * **`tlc-dictionary.txt`**: The data dictionary defining all variables used in the analysis.
 
 ## 🛠️ Tech Stack
