@@ -1,0 +1,626 @@
+---
+title: "TLC Trial Analysis Dashboard"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+    theme: yeti
+runtime: shiny
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(tidyverse)
+library(DT)
+library(patchwork)
+library(shiny)
+library(gtsummary)
+library(nlme)
+library(emmeans)
+
+# --- LOAD DATA GLOBALLY ---
+lead_mock <- tryCatch(
+  read_csv("tlc_mock.csv"),
+  error = function(e) {
+    stop("CRITICAL ERROR: 'tlc_mock.csv' was not found. Please upload this file.")
+  }
+)
+# Ensure categorical variables are factors from the start
+lead_mock <- lead_mock %>%
+  mutate(
+    Group = factor(Group, levels = c("P", "A"), labels = c("Placebo", "Succimer")),
+    ID = as.factor(ID)
+  )
+```
+
+# Introduction
+
+### Background
+
+Lead exposure in children presents a serious health concern, primarily resulting from the inhalation or ingestion of lead dust from decaying paint in homes built before 1978. Exposure causes permanent damage to the brain and nervous system, impacting development and leading to learning and behavioral problems, fatigue, and poor appetite. The most effective method to detect exposure is a blood test, as symptoms can range from subtle indicators, such as irritability and lack of focus, to severe reactions like vomiting and seizures.
+
+### TLC Trial Overview
+
+The Treatment of Lead-Exposed Children (TLC) trial was a randomized, placebo-controlled study of succimer in children with moderate blood lead levels (20-44 micrograms/dL). Succimer (DMSA) is an oral chelating agent—a medication that binds to metal ions in the body to prevent harm and facilitate excretion—used to treat heavy metal poisoning, specifically lead poisoning in children. The study investigated succimer’s effects on 780 toddlers (aged 12-33 months) from high-risk housing, who were predominantly African-American. The trial found that while succimer effectively lowered blood lead levels temporarily, it ultimately demonstrated no long-term cognitive or behavioral benefits and was even associated with slightly worsened behavior. These findings led to the conclusion that chelation with succimer is not beneficial for cognitive or behavioral issues at levels below 45 µg/dL, shifting the focus from treating low-level exposure to preventing lead exposure in the first place.
+
+### Dataset and Project Goals
+
+The data for this project consists of four repeated measurements of blood lead levels obtained at baseline (week 0), week 1, week 4, and week 6. These measurements were taken from a subsample of 100 children who were randomly assigned to either the chelation treatment with succimer or a placebo. Additionally, simulated values for age and sex were included as columns in the initial dataset. It is important to note that while the toddlers in the original trial were between 12 and 33 months old, the simulated age values extend beyond these limits. The goal of this project is to simulate missing data mechanisms using this dataset as a framework, in order to evaluate the effect that missing data has on longitudinal clinical trials, how it affects statistical significance, and the validity of conclusions drawn from studies with incomplete data.
+
+
+------------------------------------------------------------------------
+
+# Data Summary
+
+### Summary Statistics
+
+```{r}
+
+# create the summary table using a clean pipe chain
+summary_table <- lead_mock %>%
+  select(Group, sex, age, Week0, Week1, Week4, Week6) %>% 
+  tbl_summary(
+    by = Group,  
+    label = list(
+      sex = "Sex",
+      age = "Age (months)", 
+      Week0 = "Week 0 (Baseline)",
+      Week1 = "Week 1",
+      Week4 = "Week 4",
+      Week6 = "Week 6"
+    ),
+    statistic = list(all_continuous() ~ "{median} ({min} - {max})"),
+    missing = "no" 
+  ) %>%
+  add_overall() %>%
+  add_p() %>% 
+  modify_header(
+    label = "**Variable**",
+    stat_1 = "**Active**\n(N={n})",
+    stat_2 = "**Placebo**\n(N={n})",
+    stat_0 = "**Overall**\n(N={N})",
+    p.value = "**p-value**"
+  ) %>%
+  
+  bold_labels() %>%
+  modify_caption("**Blood Lead Level Summary by Treatment Group**")
+
+# Print the final table
+summary_table
+```
+
+* Continuous variables, age and blood lead levels, are summarized using the Median and the Range (Minimum - Maximum).
+* The p-value column indicates the statistical significance of differences between the Active and Placebo groups at baseline, calculated using Pearson’s Chi-squared test for categorical variables (Sex) and the Wilcoxon rank-sum test for continuous variables.
+
+
+------------------------------------------------------------------------
+
+# Exploratory Data Analysis
+
+```{r fig.width=18, fig.height=8}
+# 1. Reshape Data (Wide to Long)
+lead_long <- lead_mock %>%
+  pivot_longer(
+    cols = c(Week0, Week1, Week4, Week6),
+    names_to = "Week", 
+    values_to = "LeadLevel"
+  ) %>%
+  mutate(
+    Week = factor(Week, levels = c("Week0", "Week1", "Week4", "Week6"),
+                  labels = c("Week 0", "Week 1", "Week 4", "Week 6"))
+  )
+
+# 2. Calculate Change Score
+lead_change <- lead_mock %>%
+  mutate(LeadChange = Week6 - Week0)
+
+
+# Figure 1: Trends Over Time
+p1 <- ggplot(lead_long, aes(x = Week, y = LeadLevel, group = ID, color = Group)) +
+  geom_line(alpha = 0.5) +
+  labs(title = "Individual Blood Lead Levels Over Time",
+       subtitle = "Active treatment group shows a sharp initial drop",
+       x = "Time Point",
+       y = "Blood Lead Level",
+       color = "Group") +
+  theme_minimal() +
+  theme(legend.position = 'bottom')
+
+
+# Figure 2: Group Distributions
+p2 <- ggplot(lead_long, aes(x = Week, y = LeadLevel, fill = Group)) +
+  geom_boxplot() +
+  labs(title = "Distribution of Blood Lead Levels by Group",
+       subtitle = "Active treatment group's median drops and stays low",
+       x = "Time Point",
+       y = "Blood Lead Level",
+       fill = "Group") +
+  theme_minimal() +
+  theme(legend.position = 'bottom')
+
+
+# Figure 3: Change Over Time Distributions
+p3 <- ggplot(lead_change, aes(x = LeadChange, fill = Group)) + 
+  geom_density(alpha = 0.7) +
+  geom_vline(xintercept = 0, linetype = "dashed") + 
+  labs(title = "Distribution of Total Lead Change (Wk 6 - Wk 0)",
+       subtitle = "Active group shows sharp decrease; Placebo, slight decrease",
+       x = "Change in Blood Lead Level",
+       y = "Density",
+       fill = "Group") +
+  theme_minimal() +
+  theme(legend.position = 'bottom')
+
+# Combine all three plots
+(p1 + p2 + p3)
+```
+
+------------------------------------------------------------------------
+
+# Results
+
+### Observed vs. Predicted Mean Profiles
+
+```{r analysis_plots, fig.width=14, fig.height=4.5, message=FALSE, warning=FALSE}
+
+# --- 1. Prepare Data for Plot 1 (Observed) ---
+lead_summary_plot <- lead_mock %>%
+  pivot_longer(
+    cols = c(Week0, Week1, Week4, Week6),
+    names_to = "Week",
+    values_to = "LeadLevel"
+  ) %>%
+  mutate(
+    Time_Week = as.numeric(str_extract(Week, "[0-9]+"))
+  ) %>%
+  group_by(Time_Week, Group) %>%
+  summarise(
+    Mean_Lead = mean(LeadLevel),
+    SEM_Lead = sd(LeadLevel) / sqrt(n()),
+    .groups = 'drop'
+  )
+
+# --- 2. Prepare Data for Plot 2 (Predicted) ---
+lead_long_nlme <- lead_mock %>%
+  pivot_longer(
+    cols = c(Week0, Week1, Week4, Week6),
+    names_to = "Week",
+    values_to = "LeadLevel"
+  ) %>%
+  mutate(
+    Week = factor(Week, levels = c("Week0", "Week1", "Week4", "Week6"))
+  )
+
+# Complex Model Fitting INCLUDING Age and Sex
+model_nlme <- lme(
+  LeadLevel ~ Group * Week + age + sex, # Added Covariates here
+  random = ~ 1 | ID,
+  weights = varIdent(form = ~ 1 | Week),
+  correlation = corSymm(form = ~ 1 | ID),
+  data = lead_long_nlme,
+  control = lmeControl(maxIter = 10000, msMaxIter = 10000)
+)
+
+# Calculate marginal means (averaging over age and sex)
+model_predictions_emmeans <- emmeans(model_nlme, ~ Group | Week) %>%
+  as.data.frame()
+
+model_predictions_scaled <- model_predictions_emmeans %>%
+  mutate(
+    Time_Week_Numeric = as.numeric(str_extract(Week, "[0-9]+"))
+  )
+
+# --- 3. Plotting Logic ---
+y_min_obs <- min(lead_summary_plot$Mean_Lead - lead_summary_plot$SEM_Lead)
+y_max_obs <- max(lead_summary_plot$Mean_Lead + lead_summary_plot$SEM_Lead)
+y_min_pred <- min(model_predictions_scaled$lower.CL)
+y_max_pred <- max(model_predictions_scaled$upper.CL)
+global_y_min <- floor(min(y_min_obs, y_min_pred))
+global_y_max <- ceiling(max(y_max_obs, y_max_pred))
+
+# Plot 1: Observed
+p_observed <- ggplot(lead_summary_plot, aes(x = Time_Week, y = Mean_Lead, group = Group, color = Group)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(aes(shape = Group), size = 3) +
+  geom_errorbar(aes(ymin = Mean_Lead - SEM_Lead, ymax = Mean_Lead + SEM_Lead), width = 0.2, alpha = 0.7) +
+  labs(title = "Observed Mean Blood Lead Levels", subtitle = "Raw averages (Unadjusted)", 
+       x = "Time (weeks)", y = "Mean blood lead level (mcg/dL)", color = "Treatment", shape = "Treatment") +
+  scale_x_continuous(breaks = c(0, 1, 4, 6)) +
+  ylim(global_y_min, global_y_max) + theme_minimal() + theme(legend.position = "bottom")
+
+# Plot 2: Predicted
+p_predicted <- ggplot(model_predictions_scaled, aes(x = Time_Week_Numeric, y = emmean, group = Group, color = Group)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(aes(shape = Group), size = 3) +
+  geom_ribbon(aes(ymin = lower.CL, ymax = upper.CL, fill = Group), alpha = 0.2, color = NA) +
+  labs(title = "Predicted Mean Blood Lead Levels", subtitle = "Adjusted for Age and Sex", 
+       x = "Time (weeks)", y = "Predicted mean blood lead level (mcg/dL)", color = "Treatment", shape = "Treatment", fill = "Treatment") +
+  scale_x_continuous(breaks = c(0, 1, 4, 6)) +
+  ylim(global_y_min, global_y_max) + theme_minimal() + theme(legend.position = "bottom")
+
+p_observed + p_predicted
+```
+
+### Model Specification & Interpretation
+
+The final analysis was performed using a linear mixed-effects model. Based on the simulated nature of the data, this model adjusts for Age and Sex to provide a more precise estimate of the treatment effect:
+
+$$
+\begin{aligned}
+Y_{ij} &= \beta_0 + \beta_1 \text{Trt}_i + \beta_2 \text{Week1}_{ij} + \beta_3 \text{Week4}_{ij} + \beta_4 \text{Week6}_{ij} \\
+       &+ \beta_5 (\text{Trt}_i \times \text{Week1}_{ij}) + \beta_6 (\text{Trt}_i \times \text{Week4}_{ij}) + \beta_7 (\text{Trt}_i \times \text{Week6}_{ij}) \\
+       &+ \beta_8 \text{Age}_i + \beta_9 \text{Sex}_i \\
+       &+ b_{0i} + \epsilon_{ij},
+\end{aligned}
+$$
+
+where:
+
+* $Y_{ij}$: Blood lead level for subject $i$ at time $j$
+* $\text{Trt}_i$: Indicator for Treatment group (0 = Placebo, 1 = Succimer)
+* $\text{Week}_{ij}$: Indicator variables for time points (Reference = Week 0)
+* $\text{Age}_i$ and $\text{Sex}_i$: Baseline covariates for subject $i$
+* $b_{0i}$: Random intercept for subject $i$, assumed $b_{0i} \sim N(0, \sigma_b^2)$
+* $\epsilon_{ij}$: Residual error, assumed $\epsilon_{i} \sim N(0, \mathbf{R}_i)$.
+
+Error Structure ($\mathbf{R}_i$):
+
+Unlike a standard model, we modeled the errors with heterogeneous variances (changing over time) and an unstructured correlation matrix:
+
+$$
+\text{Var}(\epsilon_{ij}) = \sigma_j^2 \quad \text{and} \quad \text{Corr}(\epsilon_{ij}, \epsilon_{ik}) = \rho_{jk}.
+$$
+
+**Figure 1. Observed Means:** The left plot shows the observed average trend for each group. The Succimer group (active treatment) shows a dramatic drop in blood lead levels by Week 1, followed by a slight rebound. The Placebo group's levels remain relatively high and stable.
+
+**Figure 2. Predicted Means:** The right plot shows the statistical results from our final mixed-effects model after holding Age and Sex constant (marginal means). By including these covariates, the model accounts for any chance imbalances in demographics between groups. This model was chosen because it accounts for the non-linear trend (by treating time as a factor) and the complex error structure of the data (unequal variances and correlations over time).
+
+```{r extract_dashboard_findings, include=FALSE}
+# Extract baseline and interaction p-values from the model
+base_diff_p <- summary(model_nlme)$tTable["GroupSuccimer", "p-value"]
+wk1_int_p   <- summary(model_nlme)$tTable["GroupSuccimer:WeekWeek1", "p-value"]
+wk4_int_p   <- summary(model_nlme)$tTable["GroupSuccimer:WeekWeek4", "p-value"]
+wk6_int_p   <- summary(model_nlme)$tTable["GroupSuccimer:WeekWeek6", "p-value"]
+
+# Calculate the specific Week 6 contrast
+library(emmeans)
+emm_week <- emmeans(model_nlme, ~ Group | Week)
+contrasts_df <- as.data.frame(pairs(emm_week, reverse = TRUE))
+contrast_wk6_row <- contrasts_df[contrasts_df$Week == "Week6", ]
+
+# Extract estimate and p-value for the contrast
+wk6_diff_est <- abs(contrast_wk6_row$estimate)
+wk6_diff_p   <- contrast_wk6_row$p.value
+
+# Helper for formatting very small p-values
+format_p <- function(p) {
+  if(p < 0.0001) return("< 0.0001")
+  else return(paste0("= ", round(p, 3)))
+}
+```
+
+Key Findings:
+
+* The model confirms that both groups started at similar levels (the baseline difference was not statistically significant, *p* `r format_p(base_diff_p)`).
+* The dramatic drop in the Succimer group at Week 1 was highly significant (the interaction term `GroupSuccimer:WeekWeek1` had *p* `r format_p(wk1_int_p)`).
+* The model shows that the Succimer group's lead levels remained significantly lower than the Placebo group's at both Week 4 (interaction *p* `r format_p(wk4_int_p)`) and Week 6 (interaction *p* `r format_p(wk6_int_p)`).
+* A direct comparison at Week 6 found the Succimer group's mean was approximately `r round(wk6_diff_est, 2)` mcg/dL lower (*p* `r format_p(wk6_diff_p)`).
+
+------------------------------------------------------------------------
+
+# Simulation
+
+### Simulation of Missing Data
+```{r, echo=FALSE}
+# see how data is deleted for each mechanism
+# write the model and how data is missing in report in detail
+# make visuals of data and missingness used in simulation (scatterplots?)
+
+# --- UI SECTION ---
+inputPanel(
+  selectInput("miss_mech", label = "Missing Data Mechanism:",
+              choices = c("MCAR (Completely Random)" = "MCAR", 
+                          "MAR (Placebo + Younger Drop Out)" = "MAR_Age")),
+  
+  sliderInput("miss_prop", label = "Missingness Proportion (Total Data):",
+              min = 10, max = 40, value = 20, step = 5, post = "%"),
+  
+  sliderInput("n_sims", label = "Number of Trials:",
+              min = 100, max = 1000, value = 100, step = 100),
+  
+  checkboxInput("adj_covariates", label = "Correction: Adjust for Age", value = FALSE),
+  
+  actionButton("run_sim", "Run Simulation", class = "btn-primary")
+)
+
+# Layout placeholders
+plotOutput("sim_plot")
+br()
+h4("Simulation Statistics")
+tableOutput("sim_summary")
+br()
+
+# --- INTERPRETATION & MATH SECTION ---
+h4("Interpretation & Model Details")
+
+# 1. Dynamic Interpretation (Smart Text)
+htmlOutput("sim_stats_text")
+
+# 2. Static Math Equation: UNADJUSTED
+conditionalPanel(
+  condition = "input.adj_covariates == false",
+  withMathJax(), 
+  HTML("<b>Current Model: Unadjusted (Naive)</b>"),
+  
+  p("$$
+    \\begin{aligned} 
+    Y_{ij} &= \\beta_0 + \\beta_1 \\text{Trt}_i + \\beta_2 \\text{Week1}_{ij} + \\beta_3 \\text{Week4}_{ij} + \\beta_4 \\text{Week6}_{ij} \\\\ 
+           &+ \\beta_5 (\\text{Trt}_i \\times \\text{Week1}_{ij}) + \\beta_6 (\\text{Trt}_i \\times \\text{Week4}_{ij}) + \\beta_7 (\\text{Trt}_i \\times \\text{Week6}_{ij}) \\\\ 
+           &+ b_{0i} + \\epsilon_{ij} 
+    \\end{aligned} 
+    $$"),
+  
+  p("This model ignores Age. If missingness depends on Age (MAR), this model may produce biased estimates.")
+)
+
+# 3. Static Math Equation: ADJUSTED
+conditionalPanel(
+  condition = "input.adj_covariates == true",
+  HTML("<b>Current Model: Adjusted (Corrected)</b>"),
+  
+  p("$$
+    \\begin{aligned} 
+    Y_{ij} &= \\beta_0 + \\beta_1 \\text{Trt}_i + \\beta_2 \\text{Week1}_{ij} + \\beta_3 \\text{Week4}_{ij} + \\beta_4 \\text{Week6}_{ij} \\\\ 
+           &+ \\beta_5 (\\text{Trt}_i \\times \\text{Week1}_{ij}) + \\beta_6 (\\text{Trt}_i \\times \\text{Week4}_{ij}) + \\beta_7 (\\text{Trt}_i \\times \\text{Week6}_{ij}) \\\\ 
+           &+ \\mathbf{\\beta_8 \\text{Age}^c_i} + b_{0i} + \\epsilon_{ij} 
+    \\end{aligned} 
+    $$"),
+  
+  HTML("<p>This model includes Age as a covariate. We use Centered Age (\\(\\text{Age}^c_i = \\text{Age}_i - 22\\)) to stabilize the estimates around the median age (22 months) rather than extrapolating to a newborn (0 months). Crucially, including Age allows the model to mathematically adjust for the differential missingness, resulting in a near-perfect correction.</p>")
+)
+
+hr()
+
+# 4. Technical Note (Combined Full MC + Simplified Model)
+HTML("
+  <div style='background-color: #f9f9f9; padding: 15px; border-left: 5px solid #ccc; margin-top: 20px;'>
+    <h4>Technical Notes:</h4>
+    <p><b>1. Full Monte Carlo Simulation:</b> To rigorously demonstrate these concepts, this dashboard utilizes a complete Data-Generating Mechanism (DGM). Instead of resampling a static dataset, the simulation generates 100 brand-new subjects from scratch for every trial using the exact observed means and demographic ranges (Ages 6.5 to 38.6 months) from the TLC trial.</p>
+    <p><b>2. Simplified Computational Model:</b> To ensure this simulation runs instantly in your browser, we use a simplified <b>Random Intercept</b> model, which assumes constant variance over time (Homoscedasticity). In contrast, the rigorous model in the <i>Results</i> tab uses an <b>Unstructured Covariance</b> matrix to account for changing variances (Heteroscedasticity).</p>
+    <p><b>3. Baseline Protection:</b> To accurately reflect clinical trials, Week 0 (Baseline) data is strictly protected from deletion. All missingness is simulated exclusively during follow-up visits.</p>
+  </div>
+")
+```
+
+```{r simulation_run, context="server"}
+# ==========================================
+# MACHINE 1: DATA GENERATOR
+# ==========================================
+generate_trial_data <- function(n_subjects = 100) {
+  # 1. Generate Subject Demographics
+  subject_id <- 1:n_subjects
+  group <- rep(c("Placebo", "Succimer"), each = n_subjects / 2)
+  age <- runif(n_subjects, min = 6.5, max = 38.6) # Match actual TLC Mock Range
+  age_c <- age - 22 # Center age
+  
+  # 2. Random Intercepts (Creates within-subject correlation)
+  b_0i <- rnorm(n_subjects, mean = 0, sd = 4.42134) 
+  
+  subjects <- data.frame(ID = subject_id, Group = group, age = age, age_c = age_c, b_0i = b_0i)
+  
+  # 3. Expand to Longitudinal Format
+  long_data <- expand.grid(Week = c("Week0", "Week1", "Week4", "Week6"), ID = subject_id)
+  long_data <- merge(long_data, subjects, by = "ID")
+  
+  # 4. Calculate True Lead Levels
+  long_data$LeadLevel <- NA
+  for (i in 1:nrow(long_data)) {
+    grp <- long_data$Group[i]
+    wk <- as.character(long_data$Week[i])
+    ac <- long_data$age_c[i]
+    b_0 <- long_data$b_0i[i]
+    
+    # True Trajectories (From TLC EDA: lead_summary_plot)
+    expected_val <- 26.4 # Baseline average across both groups
+    
+    if (grp == "Placebo") {
+      if (wk == "Week1") expected_val <- 24.7 
+      if (wk == "Week4") expected_val <- 24.1 
+      if (wk == "Week6") expected_val <- 23.6 
+    } else if (grp == "Succimer") {
+      if (wk == "Week1") expected_val <- 13.5 
+      if (wk == "Week4") expected_val <- 15.5 
+      if (wk == "Week6") expected_val <- 20.8 
+    }
+    
+    # The True Age Effect (Needed for MAR to cause bias)
+    # Older kids naturally have lower lead levels overall (at all time points)
+    expected_val <- expected_val - (0.5 * ac)
+    
+    # 5. Add Random Intercept and Noise
+    epsilon <- rnorm(1, mean = 0, sd = 2.460057) 
+    long_data$LeadLevel[i] <- expected_val + b_0 + epsilon
+  }
+  
+  long_data$Week <- factor(long_data$Week, levels = c("Week0", "Week1", "Week4", "Week6"))
+  long_data$Group <- factor(long_data$Group, levels = c("Placebo", "Succimer"))
+  long_data$ID <- as.factor(long_data$ID)
+  
+  return(long_data)
+}
+
+# ==========================================
+# MACHINE 2: MISSING DATA MECHANISMS
+# ==========================================
+apply_mcar <- function(data, missing_prop = 0.20) {
+  n_total <- nrow(data)
+  n_delete <- floor(n_total * missing_prop)
+  
+  eligible_indices <- which(data$Week != "Week0") # Protect Baseline
+  delete_indices <- sample(eligible_indices, n_delete)
+  
+  data$LeadLevel[delete_indices] <- NA
+  return(data)
+}
+
+apply_mar <- function(data, missing_prop = 0.20) {
+  n_total <- nrow(data)
+  n_delete <- floor(n_total * missing_prop)
+  
+  eligible_indices <- which(data$Week != "Week0") # Protect Baseline
+  
+  # Differential MAR: Placebo + Younger have highest risk
+  weights <- ifelse(data$Group[eligible_indices] == "Placebo", 
+                    (40 - data$age[eligible_indices])^3, 
+                    1)
+  
+  delete_indices <- sample(eligible_indices, n_delete, prob = weights)
+  
+  data$LeadLevel[delete_indices] <- NA
+  return(data)
+}
+
+# ==========================================
+# MACHINE 3: SERVER REACTIVE LOOP
+# ==========================================
+sim_data <- eventReactive(input$run_sim, {
+  
+  n_sims <- input$n_sims
+  missing_prop <- input$miss_prop / 100
+  mechanism <- input$miss_mech
+  use_covariates <- input$adj_covariates
+  
+  # 1. Define Model Formula
+  if (use_covariates) {
+    f_string <- "LeadLevel ~ Group * Week + age_c"
+  } else {
+    f_string <- "LeadLevel ~ Group * Week"
+  }
+  sim_formula <- as.formula(f_string)
+  
+  # 2. Determine "True" Estimate (From our rules of the universe)
+  # Based on our DGM: Placebo Week 6 is 23.6, Succimer Week 6 is 20.8
+  # Difference = 20.8 - 23.6 = -2.8
+  true_val <- -2.8 
+  
+  sim_results <- numeric(n_sims)
+  
+  # 3. RUN THE MONTE CARLO LOOP
+  withProgress(message = 'Running Monte Carlo Simulation...', value = 0, {
+    for (i in 1:n_sims) {
+      
+      # Step A: Spawn a brand new universe of 100 kids
+      clean_data <- generate_trial_data(n_subjects = 100)
+      
+      # Step B: Poke holes in the data
+      if (mechanism == "MCAR") {
+        test_data <- apply_mcar(clean_data, missing_prop)
+      } else if (mechanism == "MAR_Age") {
+        test_data <- apply_mar(clean_data, missing_prop)
+      }
+      
+      # Step C: Fit Model and Extract Treatment Effect (Difference at Week 6)
+      try({
+        sim_model <- lme(
+          sim_formula, 
+          random = ~ 1 | ID,
+          data = test_data,
+          na.action = na.exclude,
+          control = lmeControl(maxIter = 50, msMaxIter = 50) 
+        )
+        sim_results[i] <- summary(sim_model)$tTable["GroupSuccimer:WeekWeek6", "Value"]
+      }, silent = TRUE)
+      
+      if (i %% 10 == 0) incProgress(10/n_sims)
+    }
+  })
+  
+  sim_results <- sim_results[sim_results != 0]
+  list(estimates = sim_results, true_est = true_val, model_type = f_string, 
+       mechanism = mechanism, correction = use_covariates)
+})
+
+# ==========================================
+# OUTPUT RENDERERS
+# ==========================================
+
+# A. Plot
+output$sim_plot <- renderPlot({
+  data_list <- sim_data()
+  results_vec <- data_list$estimates
+  true_est <- data_list$true_est
+  mean_sim <- mean(results_vec)
+  
+  ggplot(data.frame(x = results_vec), aes(x = x)) +
+    geom_histogram(bins = 30, fill = "steelblue", alpha = 0.7, color = "white") +
+    geom_vline(aes(xintercept = true_est, color = "True Estimate (Full Data)"), 
+               linewidth = 1.2, linetype = "dashed") +
+    geom_vline(aes(xintercept = mean_sim, color = "Mean Simulated"), 
+               linewidth = 1.2) +
+    labs(
+      title = paste("Simulation Results:", data_list$mechanism),
+      subtitle = ifelse(data_list$correction, "Model: Adjusted (Age included)", "Model: Unadjusted (Age ignored)"),
+      x = "Estimated Treatment Effect (Week 6)", y = "Frequency"
+    ) +
+    scale_color_manual(values = c("True Estimate (Full Data)" = "black", "Mean Simulated" = "red")) +
+    theme_minimal() + theme(legend.position = "bottom")
+})
+
+# B. Table
+output$sim_summary <- renderTable({
+  data_list <- sim_data()
+  results_vec <- data_list$estimates
+  true_est <- data_list$true_est
+  
+  mean_sim <- mean(results_vec)
+  sd_sim <- sd(results_vec)
+  bias <- mean_sim - true_est
+  
+  tibble(
+    Metric = c("True Estimate (Complete Data)", 
+               "Mean of Simulated Estimates", 
+               "Bias (Difference)", 
+               "Standard Deviation"),
+    Value = c(true_est, mean_sim, bias, sd_sim)
+  )
+}, digits = 4, align = "lr")
+
+# C. Text Output 
+output$sim_stats_text <- renderUI({
+  data_list <- sim_data()
+  results_vec <- data_list$estimates
+  true_est <- data_list$true_est
+  mean_sim <- round(mean(results_vec), 4)
+  bias     <- round(mean_sim - true_est, 4)
+  
+  # Bias Status
+  bias_status <- ifelse(abs(bias) < 0.25, 
+                        "<span style='color:green; font-weight:bold;'>Low Bias (Good)</span>", 
+                        "<span style='color:red; font-weight:bold;'>High Bias (Bad)</span>")
+  
+  explanation <- ""
+  if (data_list$mechanism == "MCAR") {
+    explanation <- "<b>Why is bias low?</b> You selected <b>MCAR</b> (Missing Completely At Random). This means the data is missing purely by chance, unrelated to the patient's health or demographics. Because the missingness is random, it does not skew the trend, and the estimate remains unbiased regardless of whether covariates are included."
+    
+  } else {
+    if (data_list$correction == FALSE) {
+      explanation <- "<b>Why is bias high?</b> You simulated a scenario where younger children in the Placebo group are more likely to drop out, but your model (Unadjusted) ignores Age. When you selectively lose these younger children (MAR), the Placebo group's average artificially improves, causing the model to underestimate the treatment effect."
+    } else {
+      explanation <- "<b>Why did bias decrease?</b> You checked the <b>Correction</b> box. The model now includes Age as a covariate. Because our data-generating mechanism dictates that Age influences lead clearing, the model mathematically adjusts for the age-related missingness, restoring an unbiased estimate."
+    }
+  }
+
+  HTML(paste0(
+    "<ul>",
+    "<li><b>True Estimate:</b> ", round(true_est, 4), "</li>",
+    "<li><b>Mean Simulated:</b> ", mean_sim, "</li>",
+    "<li><b>Bias:</b> ", bias, " (", bias_status, ")</li>",
+    "</ul>",
+    "<p style='background-color: #e6f3ff; padding: 10px; border-radius: 5px;'>", explanation, "</p>",
+    "<br>" 
+  ))
+})
+```
