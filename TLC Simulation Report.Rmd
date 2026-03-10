@@ -1,0 +1,661 @@
+---
+title: "TLC Trial: Analysis and Missing Data Simulation"
+author: "Jenny Geng"
+date: "2025-12-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# GLOBAL SETTING: This hides all code in the main report by default
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+## Introduction
+
+  Lead exposure in children presents a serious health concern, primarily resulting from the inhalation or ingestion of lead dust from decaying paint in homes built before 1978. Exposure causes permanent damage to the brain and nervous system, impacting development and leading to learning and behavioral problems, fatigue, and poor appetite. The most effective method to detect exposure is a blood test, as symptoms can range from subtle indicators, such as irritability and lack of focus, to severe reactions like vomiting and seizures.
+  
+  The Treatment of Lead-Exposed Children (TLC) trial was a randomized, placebo-controlled study of succimer in children with moderate blood lead levels (20-44 micrograms/dL). Succimer (DMSA) is an oral chelating agent—a medication that binds to metal ions in the body to prevent harm and facilitate excretion—used to treat heavy metal poisoning, specifically lead poisoning in children. The study investigated succimer’s effects on 780 toddlers (aged 12-33 months) from high-risk housing, who were predominantly African-American. The trial found that while succimer effectively lowered blood lead levels temporarily, it ultimately demonstrated no long-term cognitive or behavioral benefits and was even associated with slightly worsened behavior. These findings led to the conclusion that chelation with succimer is not beneficial for cognitive or behavioral issues at levels below 45 µg/dL, shifting the focus from treating low-level exposure to preventing lead exposure in the first place.
+  
+  The data for this project consists of four repeated measurements of blood lead levels obtained at baseline (week 0), week 1, week 4, and week 6. These measurements were taken from a subsample of 100 children who were randomly assigned to either the chelation treatment with succimer or a placebo. Additionally, simulated values for age and sex were included as columns in the initial dataset. It is important to note that while the toddlers in the original trial were between 12 and 33 months old, the simulated age values extend beyond these limits. The goal of this project is to simulate missing data mechanisms using this dataset as a framework, in order to evaluate the effect that missing data has on longitudinal clinical trials, how it affects statistical significance, and the validity of conclusions drawn from studies with incomplete data.
+
+
+## Data Summary
+
+The dataset is organized in a wide format, where each row represents a unique study participant. The data includes the subject's ID, treatment group assignment, and four repeated measures of blood lead levels: at baseline (Week 0), Week 1, Week 4, and Week 6. Additionally, simulated values for age and sex have been appended to the original dataset.
+
+Below is a data dictionary defining the variable names, data types, and descriptions:
+```{r}
+# create a tibble for the dictionary
+dictionary <- tibble::tribble(
+  ~Variable, ~Type, ~Description,
+  "ID", "Integer", "A unique identifier for each subject.",
+  "Group", "Character", "The treatment group: 'A' (Active) or 'P' (Placebo).",
+  "Week0", "Numeric", "Blood lead level at baseline (Week 0).",
+  "Week1", "Numeric", "Blood lead level after one week.",
+  "Week4", "Numeric", "Blood lead level after four weeks.",
+  "Week6", "Numeric", "Blood lead level after six weeks.",
+  "sex", "Character", "The biological sex of the subject.",
+  "age", "Numeric", "The age of the subject in months."
+)
+
+# print out table
+knitr::kable(dictionary)
+```
+
+A comprehensive summary of the study cohort is presented in the table below:
+```{r}
+library(tidyverse)
+library(gtsummary)
+
+lead_mock <- read_csv("tlc_mock.csv") %>%
+  mutate(
+    # Convert Group to factor with specific levels/labels
+    Group = factor(Group, levels = c("P", "A"), labels = c("Placebo", "Succimer")),
+    # Ensure ID is a factor
+    ID = as.factor(ID)
+  )
+
+# Create the summary table
+summary_table <- lead_mock %>%
+  select(Group, sex, age, Week0, Week1, Week4, Week6) %>% 
+  tbl_summary(
+    by = Group,  
+    label = list(
+      sex = "Sex",
+      age = "Age (months)", 
+      Week0 = "Week 0 (Baseline)",
+      Week1 = "Week 1",
+      Week4 = "Week 4",
+      Week6 = "Week 6"
+    ),
+    statistic = list(all_continuous() ~ "{median} ({min} - {max})"),
+    missing = "no" 
+  ) %>%
+  add_overall() %>%
+  add_p() %>% 
+  modify_header(
+    label = "**Variable**",
+    stat_1 = "**Active**\n(N={n})",
+    stat_2 = "**Placebo**\n(N={n})",
+    stat_0 = "**Overall**\n(N={N})",
+    p.value = "**p-value**"
+  ) %>%
+  bold_labels() %>%
+  modify_caption("**Blood Lead Level Summary by Treatment Group**")
+
+# Print the final table
+summary_table
+```
+
+The summary table classifies the data by treatment assignment, Active (Succimer) and Placebo, while also providing an overall column for the total sample. Continuous variables, such as age (measured in months) and blood lead levels, are summarized using the median and the range (minimun - maximum). This non-parametric summary was chosen over the mean and standard deviation to provide a robust measure of central tendency, as clinical data often exhibits skewed distributions or contains outliers that can distort the mean. The p-value column indicates the statistical significance of differences between the Active and Placebo groups at baseline. These values were calculated using Pearson’s Chi-squared test for categorical variables (Sex) and the Wilcoxon rank-sum test for continuous variables.
+
+
+## Exploratory Data Analysis
+
+To understand the dynamics of lead levels throughout the trial, we did exploratory visualizations on the individual trajectories, group distributions at each time point, and the overall change from baseline to Week 6.
+```{r fig.width=18, fig.height=8}
+library(patchwork)
+
+# 1. Reshape Data (Wide to Long) using lead_mock
+lead_long <- lead_mock %>%
+  pivot_longer(
+    cols = c(Week0, Week1, Week4, Week6),
+    names_to = "Week", 
+    values_to = "LeadLevel"
+  ) %>%
+  mutate(
+    # Create a nice label for plotting
+    Week_Label = factor(Week, levels = c("Week0", "Week1", "Week4", "Week6"),
+                        labels = c("Week 0", "Week 1", "Week 4", "Week 6"))
+  )
+
+# 2. Calculate Change Score
+lead_change <- lead_mock %>%
+  mutate(LeadChange = Week6 - Week0)
+
+
+# Figure 1: Trends Over Time
+p1 <- ggplot(lead_long, aes(x = Week_Label, y = LeadLevel, group = ID, color = Group)) +
+  geom_line(alpha = 0.6) +
+  labs(title = "Individual Blood Lead Levels Over Time",
+       subtitle = "Active treatment group shows a sharp initial drop",
+       x = "Time Point",
+       y = "Blood Lead Level",
+       color = "Treatment Group") +
+  theme_minimal() +
+  theme(legend.position = 'bottom')
+
+
+# Figure 2: Group Distributions
+p2 <- ggplot(lead_long, aes(x = Week_Label, y = LeadLevel, fill = Group)) +
+  geom_boxplot() +
+  labs(title = "Distribution of Blood Lead Levels by Group",
+       subtitle = "Active treatment group's median drops and stays low",
+       x = "Time Point",
+       y = "Blood Lead Level",
+       fill = "Treatment Group") +
+  theme_minimal() +
+  theme(legend.position = 'bottom')
+
+
+# Figure 3: Change Over Time Distributions
+p3 <- ggplot(lead_change, aes(x = LeadChange, fill = Group)) + 
+  geom_density(alpha = 0.7) +
+  geom_vline(xintercept = 0, linetype = "dashed") + 
+  labs(title = "Distribution of Total Lead Change (Wk 6 - Wk 0)",
+       subtitle = "Active group shows sharp decrease; Placebo shows slight decrease",
+       x = "Change in Blood Lead Level",
+       y = "Density",
+       fill = "Treatment Group") +
+  theme_minimal() +
+  theme(legend.position = 'bottom')
+
+
+# Combine all three plots
+(p1 + p2 + p3)
+```
+
+**Figure 1. Individual Blood Lead Levels Over Time**: The "spaghetti plot" (left panel) visualizes the longitudinal response profile of every subject. A distinct separation can be seen immediately, where subjects in the Active group (red) exhibit a sharp, dramatic decline in blood lead levels within the first week of treatment. Following this initial drop, many subjects in the Active group show a slight "rebound" or stabilization pattern in Weeks 4 and 6, rather than a continued sharp decline. In contrast, subjects in the Placebo group (green) show trajectories that are generally flat or decline very gradually, lacking the immediate treatment response seen in the Active group. One notable outlier in the Active group exhibits a sharp increase in lead levels by Week 6, diverging from the group trend.
+
+**Figure 2. Distribution of Blood Lead Levels by Group**: The boxplots (center panel) confirm the trends observed in the individual trajectories:
+
+* Week 0 (Baseline): The median blood lead levels and interquartile ranges (IQR) for both groups are highly comparable, indicating successful randomization.
+
+* Week 1: The median for the Active group drops significantly to approximately 12-15 µg/dL, while the Placebo group remains near baseline levels (~25 µg/dL).
+
+* Weeks 4 & 6: The Active group maintains lead levels lower than the Placebo group, but the median gradually rises after Week 1. This suggests that while the treatment is effective, blood lead levels may begin to creep back up after the initial chelation. The Placebo group shows a very slow, gradual decline but remains consistently higher than the Active group. Several outliers (black dots) are visible above the upper whiskers in both groups during the later weeks.
+
+**Figure 3. Distribution of Total Lead Change (Wk 6 - Wk 0)**: The density plot (right panel) displays the distribution of the change in blood lead levels.
+
+* Active Group (Red): The distribution is roughly bell-shaped but shifted heavily to the left, centered around a reduction of approximately -10 to -12 µg/dL. This suggests that the vast majority of treated children experienced a clinically significant decrease in lead levels.
+
+* Placebo Group (Green): The distribution is narrower and centered just slightly below zero. While some placebo subjects experienced minor natural decreases, likely due to regression to the mean or environmental changes, the magnitude of change is negligible compared to the Active group.
+
+
+## Model Specification
+
+To analyze the longitudinal trajectories of blood lead levels, we employed a Linear Mixed-Effects Model. This approach is superior to repeated measures ANOVA for this dataset as it explicitly models the correlation between repeated measurements within the same subject and allows for the adjustment of baseline covariates.
+
+The final model specifies blood lead level ($Y_{ij}$) for subject $i$ at time $j$ as a function of treatment group, discrete time points (treated as a factor to allow for non-linear trends), baseline Age, and Sex. The model is given by:
+$$
+\begin{aligned}
+Y_{ij} &= \beta_0 + \beta_1 \text{Trt}_i + \beta_2 \text{Week1}_{ij} + \beta_3 \text{Week4}_{ij} + \beta_4 \text{Week6}_{ij} \\
+       &+ \beta_5 (\text{Trt}_i \times \text{Week1}_{ij}) + \beta_6 (\text{Trt}_i \times \text{Week4}_{ij}) + \beta_7 (\text{Trt}_i \times \text{Week6}_{ij}) \\
+       &+ \beta_8 \text{Age}_i + \beta_9 \text{Sex}_i \\
+       &+ b_{0i} + \epsilon_{ij},
+\end{aligned}
+$$
+where:
+
+* $Y_{ij}$: Blood lead level for subject $i$ at time $j$
+* $\text{Trt}_i$: Indicator for Treatment group (0 = Placebo, 1 = Succimer)
+* $\text{Week}_{ij}$: Indicator variables for time points (Reference = Week 0)
+* $\text{Age}_i$ and $\text{Sex}_i$: Baseline covariates for subject $i$
+* $b_{0i}$: Random intercept for subject $i$, assumed $b_{0i} \sim N(0, \sigma_b^2)$
+* $\epsilon_{ij}$: Residual error, assumed $\epsilon_{i} \sim N(0, \mathbf{R}_i)$.
+
+Longitudinal clinical data frequently violates standard assumptions of independence and homoscedasticity. To address this, we relaxed the standard error assumptions in two ways:
+
+1. Heterogeneous Variances: We modeled the residual variance as distinct for each time point ($\text{Var}(\epsilon_{ij}) = \sigma_j^2$) using the varIdent variance function. This accounts for the observation that variance in lead levels tends to expand as the trial progresses.
+
+2. Unstructured Correlation: We modeled the correlation between repeated measures using a general symmetric correlation structure using the function corSymm, allowing the correlation between any pair of time points to be estimated freely from the data.
+
+Model diagnostics were performed to assess the validity of the linear mixed-effects model assumptions. Inspection of the standardized residual plots revealed no distinct patterns or curvature, suggesting that the linearity assumption and the modeled variance structure are appropriate. Furthermore, the Q-Q plot of the residuals followed a straight line, confirming that the normality assumption is satisfied (see Appendix B for diagnostic figures).
+
+The plots below present a side-by-side comparison of the raw observed means versus the model-predicted marginal means (adjusted for Age and Sex):
+```{r analysis_plots, fig.width=14, fig.height=4.5, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(nlme)
+library(emmeans)
+library(patchwork)
+
+# --- 1. Prepare Data for Plot 1 (Observed) ---
+lead_summary_plot <- lead_mock %>%
+  pivot_longer(
+    cols = c(Week0, Week1, Week4, Week6),
+    names_to = "Week",
+    values_to = "LeadLevel"
+  ) %>%
+  mutate(
+    Time_Week = as.numeric(str_extract(Week, "[0-9]+")),
+    Group = factor(Group, levels = c("Placebo", "Succimer"))
+  ) %>%
+  group_by(Time_Week, Group) %>%
+  summarise(
+    Mean_Lead = mean(LeadLevel),
+    SEM_Lead = sd(LeadLevel) / sqrt(n()),
+    .groups = 'drop'
+  )
+
+# --- 2. Prepare Data for Plot 2 (Predicted) ---
+lead_long_nlme <- lead_mock %>%
+  pivot_longer(
+    cols = c(Week0, Week1, Week4, Week6),
+    names_to = "Week",
+    values_to = "LeadLevel"
+  ) %>%
+  mutate(
+    Week = factor(Week, levels = c("Week0", "Week1", "Week4", "Week6"))
+  )
+
+# FIT THE ADJUSTED MODEL (Matching Dashboard)
+model_nlme <- lme(
+  LeadLevel ~ Group * Week + age + sex,
+  random = ~ 1 | ID,
+  weights = varIdent(form = ~ 1 | Week),
+  correlation = corSymm(form = ~ 1 | ID),
+  data = lead_long_nlme,
+  control = lmeControl(maxIter = 10000, msMaxIter = 10000)
+)
+
+# Marginal Means (Averaged over Age and Sex)
+model_predictions_emmeans <- emmeans(model_nlme, ~ Group | Week) %>%
+  as.data.frame()
+
+model_predictions_scaled <- model_predictions_emmeans %>%
+  mutate(
+    Time_Week_Numeric = as.numeric(str_extract(Week, "[0-9]+"))
+  )
+
+# --- 3. Plotting Logic ---
+y_min_obs <- min(lead_summary_plot$Mean_Lead - lead_summary_plot$SEM_Lead)
+y_max_obs <- max(lead_summary_plot$Mean_Lead + lead_summary_plot$SEM_Lead)
+y_min_pred <- min(model_predictions_scaled$lower.CL)
+y_max_pred <- max(model_predictions_scaled$upper.CL)
+global_y_min <- floor(min(y_min_obs, y_min_pred))
+global_y_max <- ceiling(max(y_max_obs, y_max_pred))
+
+# Plot 1: Observed
+p_observed <- ggplot(lead_summary_plot, aes(x = Time_Week, y = Mean_Lead, group = Group, color = Group)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(aes(shape = Group), size = 3) +
+  geom_errorbar(aes(ymin = Mean_Lead - SEM_Lead, ymax = Mean_Lead + SEM_Lead), width = 0.2, alpha = 0.7) +
+  labs(title = "Observed Mean Blood Lead Levels", subtitle = "Raw averages (Unadjusted)", 
+       x = "Time (weeks)", y = "Mean blood lead level (mcg/dL)", color = "Treatment", shape = "Treatment") +
+  scale_x_continuous(breaks = c(0, 1, 4, 6)) +
+  ylim(global_y_min, global_y_max) + theme_minimal() + theme(legend.position = "bottom")
+
+# Plot 2: Predicted
+p_predicted <- ggplot(model_predictions_scaled, aes(x = Time_Week_Numeric, y = emmean, group = Group, color = Group)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(aes(shape = Group), size = 3) +
+  geom_ribbon(aes(ymin = lower.CL, ymax = upper.CL, fill = Group), alpha = 0.2, color = NA) +
+  labs(title = "Predicted Mean Blood Lead Levels", subtitle = "Adjusted for Age and Sex", 
+       x = "Time (weeks)", y = "Predicted mean blood lead level (mcg/dL)", color = "Treatment", shape = "Treatment", fill = "Treatment") +
+  scale_x_continuous(breaks = c(0, 1, 4, 6)) +
+  ylim(global_y_min, global_y_max) + theme_minimal() + theme(legend.position = "bottom")
+
+p_observed + p_predicted
+```
+
+**Figure 4. Observed Mean Blood Lead Levels**: The left plot displays the raw empirical means. The Succimer group exhibits a steep decline at Week 1, followed by a partial "rebound" pattern in subsequent weeks.
+
+**Figure 5. Predicted Mean Blood Lead Levels**: The right plot shows the model-estimated marginal means. By including Age and Sex as covariates, the predicted model accounts for potential demographic imbalances, providing a more precise estimate of the treatment effect.
+
+Here is the summary of the chosen mixed-effects model, which does not assume variance is equal at all time points or that residuals are independent:
+```{r}
+library(tidyverse)
+library(nlme)
+
+# 1. Prepare data for the nlme model
+lead_mixed_nlme <- lead_mock %>%
+  pivot_longer(
+    cols = c(Week0, Week1, Week4, Week6),
+    names_to = "Week",
+    values_to = "LeadLevel"
+  ) %>%
+  mutate(
+    Week = factor(Week, levels = c("Week0", "Week1", "Week4", "Week6")),
+    # Group is already a factor from the Data Summary chunk
+    ID = as.factor(ID)
+  )
+
+# 2. Fit the ADJUSTED mixed-effects model
+# Matches the Dashboard: Includes Age and Sex
+model_nlme <- lme(
+  LeadLevel ~ Group * Week + age + sex,
+  random = ~ 1 | ID,
+  weights = varIdent(form = ~ 1 | Week),
+  correlation = corSymm(form = ~ 1 | ID),
+  data = lead_mixed_nlme,
+  control = lmeControl(maxIter = 10000, msMaxIter = 10000)
+)
+
+# 3. Display Summary
+summary(model_nlme)
+
+# --- EXTRACT VALUES FOR DYNAMIC TEXT (PART 1) ---
+base_diff_p <- summary(model_nlme)$tTable["GroupSuccimer", "p-value"]
+wk1_int_p   <- summary(model_nlme)$tTable["GroupSuccimer:WeekWeek1", "p-value"]
+wk4_int_p   <- summary(model_nlme)$tTable["GroupSuccimer:WeekWeek4", "p-value"]
+wk6_int_p   <- summary(model_nlme)$tTable["GroupSuccimer:WeekWeek6", "p-value"]
+
+# Helper function to prevent scientific notation and format small p-values
+format_p <- function(p) {
+  if (p < 0.001) return("< 0.001")
+  else return(paste0("= ", round(p, 3)))
+}
+```
+
+The model confirms that both groups started at similar levels. There was no statistically significant difference in blood lead levels between the Placebo and Succimer groups at baseline ($\beta_1$, $p$ `r format_p(base_diff_p)`), confirming successful randomization. The interaction between Treatment and Week 1 was highly significant ($p$ `r format_p(wk1_int_p)`), estimating that the Succimer group experienced a sharp divergence from the Placebo group immediately following the initiation of chelation. Significant interactions at Week 4 ($p$ `r format_p(wk4_int_p)`) and Week 6 ($p$ `r format_p(wk6_int_p)`) indicate that the treatment effect persisted throughout the study duration. 
+
+```{r}
+# 4. Perform the post-hoc contrast using emmeans
+library(emmeans)
+
+# Calculate estimated marginal means
+emm_week <- emmeans(model_nlme, ~ Group | Week)
+
+# Calculate pairwise comparisons (Succimer - Placebo)
+contrasts_all <- pairs(emm_week, reverse = TRUE)
+
+# Calculate Confidence Intervals (95%)
+ci_all <- confint(contrasts_all)
+
+# Convert to data frames for easy handling
+contrasts_df <- as.data.frame(contrasts_all)
+ci_df        <- as.data.frame(ci_all)
+
+# Filter for Week 6
+contrast_wk6_row <- contrasts_df[contrasts_df$Week == "Week6", ]
+ci_wk6_row       <- ci_df[ci_df$Week == "Week6", ]
+
+# Print results for verification
+print(contrast_wk6_row)
+print(ci_wk6_row)
+
+# --- EXTRACT VALUES FOR DYNAMIC TEXT (PART 2) ---
+wk6_diff_est <- abs(contrast_wk6_row$estimate) # Magnitude (positive number)
+wk6_diff_p   <- contrast_wk6_row$p.value
+wk6_lower    <- ci_wk6_row$lower.CL
+wk6_upper    <- ci_wk6_row$upper.CL
+```
+
+Finally, by Week 6, the model estimates the Succimer group's mean lead level to be approximately `r round(wk6_diff_est, 2)` $\mu g/dL$ lower than the Placebo group (95% CI: `r round(wk6_lower, 2)` to `r round(wk6_upper, 2)`). While the interaction remains significant in the main model ($p$ `r format_p(wk6_int_p)`), the specific contrast at this final time point is marginally significant ($p =$ `r round(wk6_diff_p, 3)`). The confidence interval including 0 indicates that we cannot rule out the possibility of no difference at this specific time point. This reflects the "rebound" effect, where lead levels in the treated group began to rise after the initial drop, narrowing the gap between the two groups by the end of the study.
+
+
+## Data Simulation
+
+To systematically quantify the impact of missing data on the ability to detect treatment effects, we performed a Monte Carlo simulation study. Rather than resampling a single static dataset, we utilized a complete Data-Generating Mechanism (DGM) to build a "synthetic universe" for every trial. This approach eliminates the random noise inherent to a single sample and allows us to rigorously compare statistical estimates against an absolute, known "ground truth." 
+
+To ensure the simulation remains computationally efficient, the models fitted during the simulation loops utilized a simplified Random Intercept model, which assumes homoscedasticity (constant variance over time). While this differs from the complex Unstructured Covariance matrix used in the primary Results section, it is mathematically sufficient to demonstrate the mechanisms of missing data bias.
+
+### Simulation Methodology
+
+The Monte Carlo simulation was structured around three modular processes: generating the clinical data, introducing specific missingness mechanisms, and fitting the statistical models.
+
+To generate the clinical data, a Data-Generating Mechanism (DGM) simulated a brand-new dataset of 100 subjects for each of the 1,000 trials. The goal of this DGM was to create a synthetic universe that resembles the baseline dynamics, variances, and treatment effects of the original TLC dataset as closely as possible. Subjects were randomly assigned to Placebo or Succimer groups and assigned ages ranging from 6.5 to 38.6 months, perfectly matching the demographic range observed in the true TLC dataset. To simulate longitudinal clinical trajectories, the true mean blood lead levels for each group at each time point were hard-coded to exactly match the observed marginal means from our Exploratory Data Analysis (e.g., a shared Baseline mean of 26.4 $\mu g/dL$, diverging to a Week 6 mean of 23.6 $\mu g/dL$ for Placebo and 20.8 $\mu g/dL$ for Succimer). Therefore, the "True" Treatment Effect at Week 6 in this simulated universe is exactly $-2.8 \mu g/dL$. 
+
+The true data-generating model driving the simulated universe is formally defined as:
+$$
+Y_{ij} = \mu_{\text{Group, Week}} - 0.5(\text{Age}^c_i) + b_{0i} + \epsilon_{ij}
+$$
+where $\mu_{\text{Group, Week}}$ represents the hard-coded group means, $\text{Age}^c_i$ is the subject's centered age, $b_{0i} \sim N(0, 4.42134^2)$ is the random intercept establishing within-subject correlation, and $\epsilon_{ij} \sim N(0, 2.460057^2)$ is the random measurement error. 
+
+Clinically, the random intercept standard deviation (4.42) represents how much children naturally differ from one another before the trial begins. For example, if the baseline group average is 26.4 $\mu g/dL$, some children naturally hover around 22 while others are near 31, creating a realistic spread of baseline lead levels. Meanwhile, the residual standard deviation (2.46) represents the random, day-to-day measurement error for a single child. Even if a child's true underlying lead level is flat at 20 $\mu g/dL$, an actual blood test might read 18 one week and 22 the next due to hydration, diet, or lab machine calibration. Adding this variance ensures the simulated trajectories contain realistic clinical noise rather than forming perfectly straight, unnatural lines. 
+
+Crucially, the $-0.5$ coefficient establishes a strong, true age effect across all time points. While the empirical age coefficient in our provided dataset was highly weak ($-0.051$), it is important to note that the age and sex covariates were originally simulated and appended to this data subset for pedagogical purposes. To adequately demonstrate the mathematical consequences of Missing at Random (MAR) attrition, we deliberately amplified the age coefficient to $-0.5$ in our synthetic universe. This acts as a stress test for our mixed-effects models while reflecting the true clinical reality of environmental lead exposure: younger toddlers (12–24 months) are at the peak of crawling and hand-to-mouth behaviors, resulting in significantly higher rates of lead dust ingestion compared to older, preschool-aged children.
+
+Following data generation, missing data mechanisms were implemented with strict baseline protection. In real-world clinical trials, baseline characteristics are recorded before any treatment-related dropout can occur. To maintain clinical validity, Week 0 data was protected from deletion. Missing data was simulated exclusively during the follow-up visits (Weeks 1, 4, and 6) by deleting 20% of the total dataset using two distinct mechanisms (MCAR and MAR).
+
+Finally, for the model fitting phase, linear mixed-effects models were fitted to the datasets containing the newly introduced missing values. The estimated Treatment Effect (the specific contrast between Succimer and Placebo at Week 6) was extracted and compared to the True Estimate ($-2.8$) to calculate statistical bias.
+
+### Missing Completely at Random (MCAR)
+
+In the first stage, we evaluated the baseline scenario where data is missing purely by chance. For the MCAR scenario, every eligible post-baseline observation had an equal, uniform probability of being deleted. This serves as a control condition to demonstrate the theoretical expectation that random missingness reduces statistical power but does not introduce systematic bias.
+
+```{r simulation_mcar, fig.width=10, fig.height=6, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(nlme)
+library(foreach)
+library(doParallel)
+
+# --- 1. DEFINE SIMULATION FUNCTIONS ---
+
+# MACHINE 1: Data Generator
+generate_trial_data <- function(n_subjects = 100) {
+  subject_id <- 1:n_subjects
+  group <- rep(c("Placebo", "Succimer"), each = n_subjects / 2)
+  age <- runif(n_subjects, min = 6.5, max = 38.6) 
+  age_c <- age - 22 
+  b_0i <- rnorm(n_subjects, mean = 0, sd = 4.42134) 
+  
+  subjects <- data.frame(ID = subject_id, Group = group, age = age, age_c = age_c, b_0i = b_0i)
+  long_data <- expand.grid(Week = c("Week0", "Week1", "Week4", "Week6"), ID = subject_id)
+  long_data <- merge(long_data, subjects, by = "ID")
+  
+  long_data$LeadLevel <- NA
+  for (i in 1:nrow(long_data)) {
+    grp <- long_data$Group[i]
+    wk <- as.character(long_data$Week[i])
+    ac <- long_data$age_c[i]
+    b_0 <- long_data$b_0i[i]
+    
+    expected_val <- 26.4 
+    if (grp == "Placebo") {
+      if (wk == "Week1") expected_val <- 24.7 
+      if (wk == "Week4") expected_val <- 24.1 
+      if (wk == "Week6") expected_val <- 23.6 
+    } else if (grp == "Succimer") {
+      if (wk == "Week1") expected_val <- 13.5 
+      if (wk == "Week4") expected_val <- 15.5 
+      if (wk == "Week6") expected_val <- 20.8 
+    }
+    
+    # Age Effect: Older kids naturally have lower lead levels overall
+    expected_val <- expected_val - (0.5 * ac)
+    
+    epsilon <- rnorm(1, mean = 0, sd = 2.460057)
+    long_data$LeadLevel[i] <- expected_val + b_0 + epsilon
+  }
+  
+  long_data$Week <- factor(long_data$Week, levels = c("Week0", "Week1", "Week4", "Week6"))
+  long_data$Group <- factor(long_data$Group, levels = c("Placebo", "Succimer"))
+  long_data$ID <- as.factor(long_data$ID)
+  return(long_data)
+}
+
+# MACHINE 2A: MCAR Mechanism
+apply_mcar <- function(data, missing_prop = 0.20) {
+  n_delete <- floor(nrow(data) * missing_prop)
+  eligible_indices <- which(data$Week != "Week0") # Protect Baseline
+  delete_indices <- sample(eligible_indices, n_delete)
+  data$LeadLevel[delete_indices] <- NA
+  return(data)
+}
+
+# --- 2. RUN MCAR SIMULATION ---
+n_sims <- 1000
+true_est_sim <- -2.8 # Based on Succimer(20.8) - Placebo(23.6)
+
+num_cores <- parallel::detectCores() - 1 
+my_cluster <- makeCluster(num_cores)
+registerDoParallel(my_cluster)
+clusterSetRNGStream(my_cluster, 123)
+
+sim_results_mcar <- foreach(i = 1:n_sims, .combine = c, .packages = c("nlme")) %dopar% {
+  clean_data <- generate_trial_data(n_subjects = 100)
+  test_data <- apply_mcar(clean_data, missing_prop = 0.20)
+  
+  result <- NA
+  tryCatch({
+    sim_model <- lme(LeadLevel ~ Group * Week, random = ~ 1 | ID, data = test_data, na.action = na.exclude, control = lmeControl(maxIter = 50))
+    result <- summary(sim_model)$tTable["GroupSuccimer:WeekWeek6", "Value"]
+  }, error = function(e) return(NA))
+  return(result)
+}
+stopCluster(my_cluster)
+
+sim_results_mcar <- sim_results_mcar[!is.na(sim_results_mcar)]
+results_df_mcar <- data.frame(Estimate = sim_results_mcar)
+mean_sim_mcar <- mean(results_df_mcar$Estimate)
+bias_mcar <- mean_sim_mcar - true_est_sim
+```
+
+```{r}
+ggplot(results_df_mcar, aes(x = Estimate)) +
+  geom_histogram(bins = 30, fill = "steelblue", alpha = 0.7, color = "white") +
+  geom_vline(aes(xintercept = true_est_sim, color = "True Estimate"), linewidth = 1.2, linetype = "dashed") +
+  geom_vline(aes(xintercept = mean_sim_mcar, color = "Mean Simulated"), linewidth = 1.2) +
+  labs(title = "Study 1: MCAR Results (1,000 Trials)", subtitle = "Estimates remain unbiased despite 20% missing data", x = "Estimated Treatment Effect at Week 6", y = "Frequency") +
+  scale_color_manual(values = c("True Estimate" = "black", "Mean Simulated" = "red")) +
+  theme_minimal() + theme(legend.position = "bottom")
+```
+
+**Figure 6. Simulation Results for MCAR Data**: The histogram displays the distribution of treatment effect estimates from 1,000 simulation trials. The mean simulated estimate (solid red line) aligns almost perfectly with the True Estimate (black dashed line). The calculated bias is negligible ($\text{Bias} =$ `r round(bias_mcar, 3)`), confirming that when data is missing completely at random, the estimates remain unbiased.
+
+### Missing at Random (MAR): Differential Dropout
+
+In the second stage, we investigated a highly critical scenario: Differential, Covariate-Dependent Missingness. We simulated a realistic clinical attrition pattern where parents of younger children assigned to the Placebo group were highly likely to withdraw from the study due to a perceived lack of improvement in their toddlers. 
+
+To achieve this, the probability of missingness was weighted exponentially: $(40 - \text{Age})^3$ for the Placebo group, while the Succimer group retained a minimal baseline risk. This ensures that while a small portion of treated children might still drop out, the vast majority of dropouts are the youngest Placebo children. Clinically, this perfectly mimics real-world trial dynamics: older placebo subjects often naturally stabilize due to decreased hand-to-mouth behaviors and standard environmental education, while treated subjects of all ages remain in the trial because the chelation therapy successfully lowers their lead levels. In contrast, the youngest placebo subjects—who remain at the peak of environmental lead ingestion and receive no active pharmacological intervention—exhibit stubbornly high lead levels, prompting early withdrawal from the study to seek necessary medical treatment. Because the DGM dictates that these younger children naturally have higher lead levels, systematically dropping them artificially lowers (improves) the Placebo group's observed average.
+
+We evaluated two mixed-effects models against this broken dataset:
+
+**Model A: Unadjusted (Naive)**
+Ignores Age entirely, assuming missingness relies only on treatment and time.
+$$
+\begin{aligned}
+Y_{ij} &= \beta_0 + \beta_1 \text{Trt}_i + \beta_2 \text{Week1}_{ij} + \beta_3 \text{Week4}_{ij} + \beta_4 \text{Week6}_{ij} \\
+       &+ \beta_5 (\text{Trt}_i \times \text{Week1}_{ij}) + \beta_6 (\text{Trt}_i \times \text{Week4}_{ij}) + \beta_7 (\text{Trt}_i \times \text{Week6}_{ij}) \\
+       &+ b_{0i} + \epsilon_{ij}
+\end{aligned}
+$$
+
+**Model B: Adjusted (Corrected)**
+Explicitly includes Centered Age as a covariate. In any statistical model, the intercept ($\beta_0$) represents the expected baseline outcome when all other covariates equal zero. We use Centered Age ($\text{Age}^c_i = \text{Age}_i - 22$) so that when this covariate equals zero, the intercept represents the expected baseline lead level for an average, typical 22-month-old toddler in the Placebo group (Treatment = 0) at Week 0. This makes the baseline statistics clinically meaningful, rather than using raw age, which would force the intercept to predict the lead level of a newborn (0 months). Crucially, because the mixed-effects model utilizes Maximum Likelihood estimation and learns the relationship between age and lead clearance from the protected baseline data, including Age allows the model to mathematically adjust for the differential missingness. It successfully compensates for the missing younger children, resulting in a near-perfect correction.
+$$
+\begin{aligned}
+Y_{ij} &= \beta_0 + \beta_1 \text{Trt}_i + \beta_2 \text{Week1}_{ij} + \beta_3 \text{Week4}_{ij} + \beta_4 \text{Week6}_{ij} \\
+       &+ \beta_5 (\text{Trt}_i \times \text{Week1}_{ij}) + \beta_6 (\text{Trt}_i \times \text{Week4}_{ij}) + \beta_7 (\text{Trt}_i \times \text{Week6}_{ij}) \\
+       &+ \mathbf{\beta_8 \text{Age}^c_i} + b_{0i} + \epsilon_{ij}
+\end{aligned}
+$$
+
+```{r simulation_mar, fig.width=10, fig.height=6, message=FALSE, warning=FALSE}
+# MACHINE 2B: MAR Mechanism
+apply_mar <- function(data, missing_prop = 0.20) {
+  n_delete <- floor(nrow(data) * missing_prop)
+  eligible_indices <- which(data$Week != "Week0") # Protect Baseline
+  
+  # Differential Weights: Placebo + Younger have highest risk
+  weights <- ifelse(data$Group[eligible_indices] == "Placebo", 
+                    (40 - data$age[eligible_indices])^3, 
+                    1)
+  
+  delete_indices <- sample(eligible_indices, n_delete, prob = weights)
+  data$LeadLevel[delete_indices] <- NA
+  return(data)
+}
+
+# --- RUN MAR SIMULATION ---
+my_cluster <- makeCluster(num_cores)
+registerDoParallel(my_cluster)
+clusterSetRNGStream(my_cluster, 456) 
+
+sim_results_mar <- foreach(i = 1:n_sims, .combine = rbind, .packages = c("nlme")) %dopar% {
+  clean_data <- generate_trial_data(n_subjects = 100)
+  test_data <- apply_mar(clean_data, missing_prop = 0.20)
+  
+  # MODEL A: UNADJUSTED
+  est_unadj <- NA
+  try({
+    m1 <- lme(LeadLevel ~ Group * Week, random = ~1|ID, data=test_data, na.action=na.exclude, control=lmeControl(maxIter=50))
+    est_unadj <- summary(m1)$tTable["GroupSuccimer:WeekWeek6", "Value"]
+  }, silent=TRUE)
+  
+  # MODEL B: ADJUSTED
+  est_adj <- NA
+  try({
+    m2 <- lme(LeadLevel ~ Group * Week + age_c, random = ~1|ID, data=test_data, na.action=na.exclude, control=lmeControl(maxIter=50))
+    est_adj <- summary(m2)$tTable["GroupSuccimer:WeekWeek6", "Value"]
+  }, silent=TRUE)
+  
+  c(est_unadj, est_adj)
+}
+stopCluster(my_cluster)
+
+results_df_mar <- na.omit(as.data.frame(sim_results_mar))
+colnames(results_df_mar) <- c("Unadjusted", "Adjusted")
+
+mean_unadj <- mean(results_df_mar$Unadjusted)
+mean_adj   <- mean(results_df_mar$Adjusted)
+bias_unadj <- mean_unadj - true_est_sim
+bias_adj   <- mean_adj - true_est_sim
+```
+
+```{r}
+ggplot(results_df_mar, aes(x = Unadjusted)) +
+  geom_histogram(bins = 30, fill = "#D9534F", alpha = 0.8, color = "white") + 
+  geom_vline(aes(xintercept = true_est_sim, color = "True Estimate"), linewidth = 1.2, linetype = "dashed") +
+  geom_vline(aes(xintercept = mean_unadj, color = "Mean Simulated"), linewidth = 1.2) +
+  labs(title = "Study 2A: Unadjusted Model Results (High Bias)", subtitle = "Without correction, the model severely underestimates the treatment effect", x = "Estimated Treatment Effect (Week 6)", y = "Frequency") +
+  scale_color_manual(values = c("True Estimate" = "black", "Mean Simulated" = "darkred")) +
+  theme_minimal() + theme(legend.position = "bottom")
+```
+
+**Figure 7. Unadjusted Model Results under Differential MAR**: The naive model (red) exhibits substantial bias because it compares the Succimer group to an artificially "healthier" subset of the Placebo group. By ignoring Age, the model fails to account for the systematic loss of younger, more severely affected children, causing it to severely underestimate the magnitude of the drug's true effectiveness ($\text{Bias} =$ `r round(bias_unadj, 3)`).
+
+```{r}
+ggplot(results_df_mar, aes(x = Adjusted)) +
+  geom_histogram(bins = 30, fill = "steelblue", alpha = 0.8, color = "white") +
+  geom_vline(aes(xintercept = true_est_sim, color = "True Estimate"), linewidth = 1.2, linetype = "dashed") +
+  geom_vline(aes(xintercept = mean_adj, color = "Mean Simulated"), linewidth = 1.2) +
+  labs(title = "Study 2B: Adjusted Model Results (Low Bias)", subtitle = "Correcting for Age restores the validity of the estimates", x = "Estimated Treatment Effect (Week 6)", y = "Frequency") +
+  scale_color_manual(values = c("True Estimate" = "black", "Mean Simulated" = "red")) +
+  theme_minimal() + theme(legend.position = "bottom")
+```
+
+**Figure 8. Adjusted Model Results under Differential MAR**: The adjusted model (blue) successfully demonstrates the mathematical power of covariate correction. Because the mixed-effects model utilizes Maximum Likelihood estimation and explicitly includes age_c as a covariate, it correctly identifies that the missing Placebo subjects were younger and therefore likely had higher lead levels. It mathematically recovers this missing information, completely neutralizing the bias and restoring the true estimate ($\text{Bias} =$ `r round(bias_adj, 3)`).
+
+
+### References
+
+**Primary Study**
+
+* The Treatment of Lead-Exposed Children (TLC) Trial Group. (2000). Safety and Efficacy of Succimer in Toddlers with Blood Lead Levels of 20–44 $\mu$g/dL. *New England Journal of Medicine*, 342(19), 1390–1398. [https://doi.org/10.1056/NEJM200005113421902](https://doi.org/10.1056/NEJM200005113421902)
+
+**Data Source**
+
+* Fitzmaurice, G. M., Laird, N. M., & Ware, J. H. (2011). *Applied Longitudinal Analysis* (2nd ed.). Wiley. (Dataset available at: [https://content.sph.harvard.edu/fitzmaur/ala2e/](https://content.sph.harvard.edu/fitzmaur/ala2e/))
+
+**Statistical Software & Packages**
+
+* R Core Team. (2024). *R: A language and environment for statistical computing*. R Foundation for Statistical Computing, Vienna, Austria. [https://www.R-project.org/](https://www.R-project.org/)
+* Pinheiro, J., Bates, D., & R Core Team. (2023). *nlme: Linear and Nonlinear Mixed Effects Models*. R package version 3.1-163. [https://CRAN.R-project.org/package=nlme](https://CRAN.R-project.org/package=nlme)
+* Wickham, H., et al. (2019). Welcome to the tidyverse. *Journal of Open Source Software*, 4(43), 1686. [https://doi.org/10.21105/joss.01686](https://doi.org/10.21105/joss.01686)
+* Lenth, R. V. (2023). *emmeans: Estimated Marginal Means, aka Least-Squares Means*. R package version 1.8.8. [https://CRAN.R-project.org/package=emmeans](https://CRAN.R-project.org/package=emmeans)
+* Sjoberg, D. D., et al. (2021). Reproducible Summary Tables with the gtsummary Package. *The R Journal*, 13(1), 570–580. [https://doi.org/10.32614/RJ-2021-053](https://doi.org/10.32614/RJ-2021-053)
+* Pedersen, T. L. (2022). *patchwork: The Composer of Plots*. R package version 1.1.2. [https://CRAN.R-project.org/package=patchwork](https://CRAN.R-project.org/package=patchwork)
+* Microsoft Corporation, & Weston, S. (2022). *doParallel: Foreach Parallel Adaptor for the 'parallel' Package*. R package version 1.0.17. [https://CRAN.R-project.org/package=doParallel](https://CRAN.R-project.org/package=doParallel)
+* Microsoft Corporation, & Weston, S. (2022). *foreach: Provides Foreach Looping Construct*. R package version 1.5.2. [https://CRAN.R-project.org/package=foreach](https://CRAN.R-project.org/package=foreach)
+
+**Generative AI Tool**
+
+* Google. (2025). Gemini [Large language model]. [https://gemini.google.com/](https://gemini.google.com/)
+
+
+### Appendix
+
+**A. R Code for Analysis and Simulation**
+
+Below is the full R code used for data cleaning, modeling, and simulation:
+
+```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+# This chunk automatically collects and prints ALL code from the document
+```
+
+**B. Model Diagnostics**
+
+The following plots were used to verify the assumptions of the linear mixed-effects model, specifically checking for the normality of residuals and the adequacy of the variance structure.
+
+```{r diagnostics_resid, echo=FALSE, fig.height=4, fig.width=6}
+# Standard residual plot for lme objects
+plot(model_nlme, main = "Standardized Residuals vs. Fitted Values")
+```
+
+```{r diagnostics_qq, echo=FALSE, fig.height=4, fig.width=6}
+# Q-Q plot for lme objects
+qqnorm(model_nlme, abline = c(0, 1), main = "Q-Q Plot of Standardized Residuals")
+```
+
