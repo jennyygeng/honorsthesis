@@ -22,7 +22,3 @@ In clinical trials, patient non-adherence and dropout can severely compromise da
 * **Framework:** R Markdown, Shiny (Flexdashboard)
 * **Key Libraries:** `shiny`, `rmarkdown`, `dplyr`, `ggplot2`
 * **Deployment:** shinyapps.io
-
-## 👩🏻‍💻 Author
-**Jenny Geng** | B.S. in Statistics & Data Science
-*University of Arizona | W.A. Franke Honors College*
