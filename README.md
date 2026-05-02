@@ -19,6 +19,7 @@ In clinical trials, patient non-adherence and dropout can severely compromise da
 
 ## 🛠️ Tech Stack
 * **Language:** R
-* **Framework:** R Markdown, Shiny (Flexdashboard)
-* **Key Libraries:** `shiny`, `rmarkdown`, `dplyr`, `ggplot2`
+* **Framework:** R Markdown, Shiny (`flexdashboard`)
+* **Data Manipulation & UI:** `tidyverse` (`dplyr`, `ggplot2`), `DT`, `patchwork`, `gtsummary`
+* **Statistical Modeling:** `nlme` (Linear Mixed-Effects Models), `emmeans`
 * **Deployment:** shinyapps.io
