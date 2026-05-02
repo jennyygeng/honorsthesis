@@ -1,22 +1,28 @@
-# Clinical Trial Outcomes Simulation Dashboard 🏥📊
+# Missing Data Mechanisms: Monte Carlo Simulation Dashboard 🏥📊
 
-An interactive dashboard and comprehensive report developed to simulate and analyze how patient dropout rates and missing data mechanisms impact the statistical power of clinical trials, utilizing the Treatment of Lead-Exposed Children (TLC) dataset.
+An interactive R Shiny web application and Honors Thesis analyzing how differential attrition and missing data mechanisms (MCAR, MAR) impact the statistical power of longitudinal clinical trials.
+
+### 🔗 **[View the Live Interactive Dashboard Here](https://jennyygeng.shinyapps.io/TLC_Shiny_Dashboard/)**
 
 ## 📌 Project Overview
-In clinical trials, patient non-adherence and dropout can severely compromise data integrity and statistical power. Using the longitudinal TLC dataset, this project provides a simulated environment to:
+In clinical trials, patient non-adherence and dropout can severely compromise data integrity and statistical power. Using the longitudinal Treatment of Lead-Exposed Children (TLC) dataset as a framework, this project provides a simulated Monte Carlo environment to:
 * Estimate treatment effects under various patient adherence assumptions.
-* Visualize the impact of different missing data mechanisms (e.g., Missing Completely at Random, Missing at Random).
-* Provide an interactive R Shiny dashboard for exploring how these variables affect overall clinical trial outcomes.
+* Visualize the impact of different missing data mechanisms.
+* Evaluate how incomplete data impacts statistical significance and the validity of clinical conclusions.
 
 ## ⚙️ Repository Contents
-* **`TLC Dashboard.Rmd`**: The interactive Shiny-enabled R Markdown dashboard used to visualize the simulated data and power analyses.
-* **`TLC Simulation Report.Rmd`**: A detailed statistical report outlining the methodology, simulation parameters, and findings.
-* **`tlc_mock.csv`**: The dataset used in the project containing both the original TLC trial data and additional simulated columns.
-* **`tlc-data.txt`**: Raw text format of the original TLC dataset.
-* **`tlc-dictionary.txt`**: The data dictionary defining all variables used in the analysis.
+* **`GengJ.pdf`**: The final approved Honors Thesis report detailing the clinical background, statistical methodology, and conclusions.
+* **`TLC Dashboard.Rmd`**: The source code for the interactive Shiny (Flexdashboard) application.
+* **`TLC Simulation Report.Rmd`**: The detailed statistical report generating the simulation parameters and findings.
+* **`tlc_mock.csv`**: The dataset containing both the original TLC trial data and the simulated missingness columns.
+* **`tlc-dictionary.txt` & `tlc-data.txt`**: Data dictionaries and abstracts defining the variables and origins of the TLC study.
 
 ## 🛠️ Tech Stack
 * **Language:** R
 * **Framework:** R Markdown, Shiny (Flexdashboard)
 * **Key Libraries:** `shiny`, `rmarkdown`, `dplyr`, `ggplot2`
-* **Environment:** RStudio
+* **Deployment:** shinyapps.io
+
+## 👩🏻‍💻 Author
+**Jenny Geng** | B.S. in Statistics & Data Science
+*University of Arizona | W.A. Franke Honors College*
